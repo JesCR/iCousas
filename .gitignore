@@ -1,0 +1,309 @@
+# ===========================================
+# CONFIGURACIÓN ESPECÍFICA DEL PROYECTO ICOUSAS
+# ===========================================
+
+# Archivos de configuración con credenciales
+.env
+.env.local
+.env.production
+.env.staging
+
+# Archivos de ejemplo de configuración (no subir por seguridad)
+.env.example
+
+# Directorios de logs
+logs/
+*.log
+
+# ===========================================
+# PYTHON - Archivos estándar
+# ===========================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ===========================================
+# PYINSTALLER - Empaquetado ejecutables
+# ===========================================
+
+# Usually these files are written by a python script from a template
+# before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ===========================================
+# PYTEST - Testing
+# ===========================================
+
+# pytest
+.cache
+.pytest_cache/
+*.pytest_cache
+pytest.ini
+.pytest.ini
+
+# Coverage reports
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+htmlcov/
+.tox/
+.nox/
+
+# ===========================================
+# VSCODE - IDE
+# ===========================================
+
+.vscode/
+*.code-workspace
+
+# ===========================================
+# CURSOR - IDE
+# ===========================================
+
+.cursor/
+
+# ===========================================
+# PYCHARM - IDE
+# ===========================================
+
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# ===========================================
+# WINDOWS - Sistema operativo
+# ===========================================
+
+# Windows thumbnail cache files
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+
+# Dump file
+*.stackdump
+
+# Folder config file
+[Dd]esktop.ini
+
+# Recycle Bin used on file shares
+$RECYCLE.BIN/
+
+# Windows Installer files
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
+# Windows shortcuts
+*.lnk
+
+# ===========================================
+# MACOS - Sistema operativo
+# ===========================================
+
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Icon must end with two \r
+Icon
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donations
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# ===========================================
+# LINUX - Sistema operativo
+# ===========================================
+
+*~
+
+# temporary files which can be created if a process still has a handle open of a deleted file
+.fuse_hidden*
+
+# KDE directory preferences
+.directory
+
+# Linux trash folder which might appear on any partition or disk
+.Trash-*
+
+# .nfs files are created when an open file is removed but is still being accessed
+.nfs*
+
+# ===========================================
+# DATABASE - Archivos de base de datos
+# ===========================================
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# SQL Server
+*.mdf
+*.ldf
+*.bak
+
+# ===========================================
+# BACKUPS - Archivos de respaldo
+# ===========================================
+
+*.bak
+*.backup
+*.old
+*.orig
+*.swp
+*.swo
+*~
+
+# ===========================================
+# SENSITIVE FILES - Archivos sensibles
+# ===========================================
+
+# API keys, passwords, secrets
+secrets.json
+config.json
+credentials.json
+keys.json
+
+# SSH keys
+id_rsa
+id_rsa.pub
+known_hosts
+
+# ===========================================
+# TEMP FILES - Archivos temporales
+# ===========================================
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor files
+*.sublime-project
+*.sublime-workspace
+.vscode/settings.json
+.idea/
+
+# ===========================================
+# CI/CD - Integración continua
+# ===========================================
+
+# GitHub Actions
+.github/workflows/*.log
+
+# Jenkins
+build.log
+
+# Travis CI
+.travis.yml
+
+# ===========================================
+# MISC - Varios
+# ===========================================
+
+# Specstory (Cursor IDE)
+.specstory
+
+# MyPy cache
+.mypy_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# Ruff
+.ruff_cache/
+
+# ===========================================
+# ARCHIVOS GRANDES - Evitar commits grandes
+# ===========================================
+
+# Archivos mayores a 100MB
+*.zip
+*.tar.gz
+*.rar
+*.7z
+*.exe
+*.dll
+*.iso
+
+# Directorios grandes
+node_modules/
+vendor/
+
+# ===========================================
+# PATRONES PERSONALIZADOS
+# ===========================================
+
+# Archivos temporales del proyecto
+temp/
+tmp/
+cache/
