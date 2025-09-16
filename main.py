@@ -202,6 +202,31 @@ class Config:
             'connection_timeout': int(os.getenv('DB_CONNECTION_TIMEOUT', 30))
         }
 
+    @classmethod
+    def get_proxy_config(cls) -> Optional[Dict[str, Any]]:
+        """Obtener configuración de proxy desde variables de entorno."""
+        http_proxy = os.getenv('HTTP_PROXY')
+        https_proxy = os.getenv('HTTPS_PROXY')
+        no_proxy = os.getenv('NO_PROXY')
+
+        # Solo configurar proxy si las variables principales tienen valores
+        if http_proxy or https_proxy:
+            proxy_config = {}
+
+            # Configurar proxies HTTP y HTTPS
+            if http_proxy:
+                proxy_config['http'] = http_proxy
+            if https_proxy:
+                proxy_config['https'] = https_proxy
+
+            # Configurar excepciones (no_proxy)
+            if no_proxy:
+                proxy_config['no_proxy'] = no_proxy
+
+            return proxy_config
+
+        return None
+
 class AuthenticationError(Exception):
     """Excepción personalizada para fallos de autenticación."""
     pass
@@ -236,6 +261,12 @@ class AuthManager:
             # Suprimir advertencias SSL
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        # Configurar proxy si está disponible
+        proxy_config = Config.get_proxy_config()
+        if proxy_config:
+            session.proxies.update(proxy_config)
+            logger.debug(f'Configuración de proxy aplicada para autenticación: {proxy_config}')
 
         return session
 
@@ -354,6 +385,12 @@ class SensorDataFetcher:
             # Suprimir advertencias SSL
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+        # Configurar proxy si está disponible
+        proxy_config = Config.get_proxy_config()
+        if proxy_config:
+            session.proxies.update(proxy_config)
+            logger.debug(f'Configuración de proxy aplicada para obtención de datos: {proxy_config}')
 
         return session
 
@@ -811,6 +848,18 @@ def main() -> int:
         # Validar variables de entorno
         Config.validate()
         logger.info('Configuración de entorno validada')
+
+        # Registrar configuración de proxy activa
+        proxy_config = Config.get_proxy_config()
+        if proxy_config:
+            logger.info('Configuración de proxy detectada y activada:')
+            for key, value in proxy_config.items():
+                if key == 'no_proxy':
+                    logger.info(f'  NO_PROXY: {value} (hosts excluidos del proxy)')
+                else:
+                    logger.info(f'  {key.upper()}_PROXY: {value}')
+        else:
+            logger.info('No se detectó configuración de proxy - las conexiones serán directas')
 
         # Inicializar componentes
         keycloak_config = Config.get_keycloak_config()
