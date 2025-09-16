@@ -297,14 +297,14 @@ class AuthManager:
         
         try:
             # Registrar información detallada de la petición HTTP
-            logger.info("=== DETALLES DE PETICIÓN HTTP ===")
-            logger.info(f"Método: POST")
-            logger.info(f"URL: {self.config['url']}")
-            logger.info(f"Headers: Content-Type: application/x-www-form-urlencoded")
-            logger.info(f"Datos: client_id={self.config['client_id']}&username={self.config['username']}&password=[OCULTO]&grant_type={self.config['grant_type']}")
+            logger.debug("=== DETALLES DE PETICIÓN HTTP ===")
+            logger.debug(f"Método: POST")
+            logger.debug(f"URL: {self.config['url']}")
+            logger.debug(f"Headers: Content-Type: application/x-www-form-urlencoded")
+            logger.debug(f"Datos: client_id={self.config['client_id']}&username={self.config['username']}&password=[OCULTO]&grant_type={self.config['grant_type']}")
             logger.debug(f"Longitud de contraseña: {len(self.config['password'])} caracteres")
             logger.debug("El diccionario de datos contiene información sensible - no registrado")
-            logger.info("Timeout: {} segundos".format(self.http_config['timeout']))
+            logger.debug("Timeout: {} segundos".format(self.http_config['timeout']))
 
             # Generar equivalente curl (sin contraseña por seguridad)
             curl_cmd = (
@@ -318,7 +318,7 @@ class AuthManager:
             )
             if not self.http_config.get('verify_ssl', True):
                 curl_cmd += " --insecure"
-            logger.info(f"equivalente curl: {curl_cmd}")
+            logger.debug(f"equivalente curl: {curl_cmd}")
 
             response = session.post(
                 self.config['url'],
@@ -327,14 +327,14 @@ class AuthManager:
             )
 
             # Registrar detalles de respuesta
-            logger.info("=== DETALLES DE RESPUESTA HTTP ===")
-            logger.info(f"Código de estado: {response.status_code}")
-            logger.info(f"Headers de respuesta: {dict(response.headers)}")
+            logger.debug("=== DETALLES DE RESPUESTA HTTP ===")
+            logger.debug(f"Código de estado: {response.status_code}")
+            logger.debug(f"Headers de respuesta: {dict(response.headers)}")
             if response.status_code == 200:
                 logger.debug(f"Cuerpo de respuesta: {response.text}")
             else:
-                logger.info(f"Cuerpo de respuesta: {response.text}")
-            logger.info("=== FIN DETALLES HTTP ===")
+                logger.debug(f"Cuerpo de respuesta: {response.text}")
+            logger.debug("=== FIN DETALLES HTTP ===")
 
             if response.status_code == 200:
                 token_data = response.json()
@@ -407,7 +407,7 @@ class SensorDataFetcher:
     
     def fetch_data(self) -> List[Dict[str, Any]]:
         """Obtener datos de sensores desde la API."""
-        logger.info('Iniciando operación de obtención de datos')
+        logger.debug('Iniciando operación de obtención de datos')
 
         from_date, to_date = self._calculate_time_window()
         logger.info(f'Obteniendo datos desde {from_date} hasta {to_date}')
@@ -437,16 +437,16 @@ class SensorDataFetcher:
                 }
 
                 # Registrar información detallada de petición HTTP para API de sensores
-                logger.info("=== DETALLES DE PETICIÓN API SENSORES ===")
-                logger.info(f"Método: GET")
+                logger.debug("=== DETALLES DE PETICIÓN API SENSORES ===")
+                logger.debug(f"Método: GET")
                 full_url = f"{url}?{requests.compat.urlencode(params)}"
-                logger.info(f"URL completa: {full_url}")
+                logger.debug(f"URL completa: {full_url}")
                 # Ocultar headers sensibles
                 safe_headers = headers.copy()
                 if 'Authorization' in safe_headers:
                     safe_headers['Authorization'] = 'Bearer ***'
-                logger.info(f"Headers: {safe_headers}")
-                logger.info("Timeout: {} segundos".format(self.http_config['timeout']))
+                logger.debug(f"Headers: {safe_headers}")
+                logger.debug("Timeout: {} segundos".format(self.http_config['timeout']))
 
                 # Generar equivalente curl
                 curl_cmd = f"curl -X GET '{full_url}'"
@@ -458,7 +458,7 @@ class SensorDataFetcher:
                 curl_cmd += f" --max-time {self.http_config['timeout']}"
                 if not self.http_config.get('verify_ssl', True):
                     curl_cmd += " --insecure"
-                logger.info(f"equivalente curl: {curl_cmd}")
+                logger.debug(f"equivalente curl: {curl_cmd}")
 
                 response = session.get(
                     url,
@@ -468,28 +468,28 @@ class SensorDataFetcher:
                 )
 
                 # Registrar detalles de respuesta
-                logger.info("=== DETALLES DE RESPUESTA API SENSORES ===")
-                logger.info(f"Código de estado: {response.status_code}")
-                logger.info(f"Headers de respuesta: {dict(response.headers)}")
+                logger.debug("=== DETALLES DE RESPUESTA API SENSORES ===")
+                logger.debug(f"Código de estado: {response.status_code}")
+                logger.debug(f"Headers de respuesta: {dict(response.headers)}")
                 if response.status_code == 200:
                     logger.debug(f"Longitud del cuerpo de respuesta: {len(response.text)} caracteres")
                     # Parsear y registrar información básica sobre dispositivos
                     try:
                         response_data = response.json()
                         if 'devices' in response_data:
-                            logger.info(f"Encontrados {len(response_data['devices'])} dispositivos en respuesta")
+                            logger.debug(f"Encontrados {len(response_data['devices'])} dispositivos en respuesta")
                         else:
-                            logger.info("No se encontró clave 'devices' en respuesta")
+                            logger.debug("No se encontró clave 'devices' en respuesta")
                     except:
-                        logger.info("La respuesta no es JSON válido")
+                        logger.debug("La respuesta no es JSON válido")
                 else:
-                    logger.info(f"Cuerpo de respuesta: {response.text}")
-                logger.info("=== FIN DETALLES API SENSORES ===")
+                    logger.debug(f"Cuerpo de respuesta: {response.text}")
+                logger.debug("=== FIN DETALLES API SENSORES ===")
 
                 # Manejar 401 refrescando token una vez
                 if response.status_code == 401:
                     logger.warning('Token expirado (401), refrescando y reintentando...')
-                    logger.info("=== DETALLES DE PETICIÓN REFRESCO TOKEN ===")
+                    logger.debug("=== DETALLES DE PETICIÓN REFRESCO TOKEN ===")
 
                     # Refrescar token
                     self.auth_manager._authenticate()  # Forzar refresco de token
@@ -499,8 +499,8 @@ class SensorDataFetcher:
                     headers['Authorization'] = f'Bearer {token}'
 
                     # Reintentar petición con nuevo token
-                    logger.info("Reintentando petición a API de sensores con token refrescado...")
-                    logger.info(f"Header Authorization actualizado: Bearer ***")
+                    logger.debug("Reintentando petición a API de sensores con token refrescado...")
+                    logger.debug(f"Header Authorization actualizado: Bearer ***")
 
                     response = session.get(
                         url,
@@ -510,19 +510,19 @@ class SensorDataFetcher:
                     )
 
                     # Registrar respuesta del reintento
-                    logger.info("=== DETALLES DE RESPUESTA REINTENTO ===")
-                    logger.info(f"Código de estado del reintento: {response.status_code}")
+                    logger.debug("=== DETALLES DE RESPUESTA REINTENTO ===")
+                    logger.debug(f"Código de estado del reintento: {response.status_code}")
                     if response.status_code == 200:
                         logger.debug(f"Longitud del cuerpo de respuesta del reintento: {len(response.text)} caracteres")
                         try:
                             response_data = response.json()
                             if 'devices' in response_data:
-                                logger.info(f"Reintento encontró {len(response_data['devices'])} dispositivos en respuesta")
+                                logger.debug(f"Reintento encontró {len(response_data['devices'])} dispositivos en respuesta")
                         except:
-                            logger.info("Respuesta del reintento no es JSON válido")
+                            logger.debug("Respuesta del reintento no es JSON válido")
                     else:
-                        logger.info(f"Cuerpo de respuesta del reintento: {response.text}")
-                    logger.info("=== FIN DETALLES REINTENTO ===")
+                        logger.debug(f"Cuerpo de respuesta del reintento: {response.text}")
+                    logger.debug("=== FIN DETALLES REINTENTO ===")
 
                 if response.status_code == 200:
                     data = response.json()
@@ -554,7 +554,7 @@ class SensorDataFetcher:
             except requests.RequestException as e:
                 raise DataFetchError(f'Petición de obtención de datos fallida: {str(e)}')
 
-        logger.info(f'Se obtuvieron exitosamente {len(all_devices)} dispositivos totales')
+        logger.info(f'Se obtuvieron {len(all_devices)} registros')
         return all_devices
 
 class DataProcessor:
@@ -636,7 +636,7 @@ class DataProcessor:
     @classmethod
     def process_devices(cls, devices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Procesa todos los registros de dispositivos y retorna datos normalizados."""
-        logger.info(f'Procesando {len(devices)} registros de dispositivos')
+        logger.info(f'Procesando {len(devices)} registros')
 
         normalized_records = []
         for device in devices:
@@ -701,7 +701,7 @@ class DatabaseManager:
             # Iniciar transacción
             connection.autocommit = False
 
-            logger.info(f'Iniciando upsert de {len(records)} registros')
+            logger.debug(f'Iniciando upsert de {len(records)} registros')
 
             # Crear tabla temporal
             temp_table_name = '#staging'
@@ -810,12 +810,10 @@ class DatabaseManager:
             # Confirmar transacción
             connection.commit()
 
-            # Calcular actualizados vs insertados (aproximado)
-            # Esta es una simplificación - en un escenario real podría necesitar rastrearse diferente
             updated_count = max(0, affected_rows - len(records))
             inserted_count = len(records) - updated_count
 
-            logger.info(f'Upsert completado: {inserted_count} insertados, {updated_count} actualizados')
+            logger.debug(f'Upsert completado: {inserted_count} insertados, {updated_count} actualizados')
             return inserted_count, updated_count
 
         except pyodbc.Error as e:
@@ -841,8 +839,8 @@ class DatabaseManager:
 def main() -> int:
     """Función principal para ejecutar el proceso de recopilación y almacenamiento de datos."""
     start_time = datetime.now(timezone.utc)
-    logger.info('Iniciando trabajo de recopilación de datos de sensores iCousas')
-    logger.info(f'Los archivos de log se guardarán en: {os.path.join(os.getcwd(), "logs")}')
+    logger.info('Empezamos.')
+    logger.debug(f'Los archivos de log se guardarán en: {os.path.join(os.getcwd(), "logs")}')
 
     try:
         # Validar variables de entorno
@@ -855,9 +853,9 @@ def main() -> int:
             logger.info('Configuración de proxy detectada y activada:')
             for key, value in proxy_config.items():
                 if key == 'no_proxy':
-                    logger.info(f'  NO_PROXY: {value} (hosts excluidos del proxy)')
+                    logger.debug(f'  NO_PROXY: {value} (hosts excluidos del proxy)')
                 else:
-                    logger.info(f'  {key.upper()}_PROXY: {value}')
+                    logger.debug(f'  {key.upper()}_PROXY: {value}')
         else:
             logger.info('No se detectó configuración de proxy - las conexiones serán directas')
 
@@ -895,7 +893,7 @@ def main() -> int:
 
         logger.info(
             f'Trabajo completado exitosamente en {duration.total_seconds():.2f} segundos. '
-            f'Procesados {len(normalized_records)} registros: {inserted} insertados, {updated} actualizados'
+            f'Procesados {len(normalized_records)} registros: {inserted + updated} procesados'
         )
 
         return 0
