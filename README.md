@@ -30,12 +30,17 @@ Un script robusto y de producción en Python para recopilar, procesar y almacena
 - **Paginación automática**: Manejo de grandes volúmenes de datos
 - **Normalización**: Conversión automática de tipos de datos
 - **Validación**: Verificación de integridad de datos
+- **Filtrado inteligente**: Evita reprocesar datos ya procesados basándose en metadatos
+- **Barra de progreso visual**: Seguimiento en tiempo real del procesamiento
+- **Procesamiento en dos fases**: API → TemporalDatosBrutos_iCousas → TemporalDatosBrutos
 
 ### 🗄️ Almacenamiento en Base de Datos
 - **SQL Server**: Compatibilidad completa
 - **Operación MERGE**: Insert/Update automático (Upsert)
 - **Transacciones ACID**: Garantía de integridad de datos
 - **Tablas temporales**: Optimización de rendimiento
+- **Manejo inteligente de duplicados**: Verificación previa con redondeo de floats
+- **Actualización automática de metadatos**: Tabla CruceEstacionesListaEstacionesFechasUltimosDatos
 - **Manejo de errores**: Rollback automático en fallos
 
 ### 📝 Logging Avanzado
@@ -43,6 +48,8 @@ Un script robusto y de producción en Python para recopilar, procesar y almacena
 - **Rotación automática**: Archivo por hora (formato YYYY-MM-DD-HH.txt)
 - **Niveles configurables**: DEBUG, INFO, WARNING, ERROR
 - **Información detallada**: Curl equivalents, headers, respuestas
+- **Consultas SQL visibles**: Para debugging de base de datos
+- **Barra de progreso integrada**: Seguimiento visual en logs
 - **Seguridad**: Contraseñas ocultas en logs
 
 ### 🛠️ Características Técnicas
@@ -60,6 +67,8 @@ iCousas Data Collector
 ├── 📡 SensorDataFetcher (API REST)
 ├── 🔄 DataProcessor (ETL)
 ├── 💾 DatabaseManager (SQL Server)
+├── 🔄 DataIngestionManager (Procesamiento Final)
+├── 📊 ProgressMonitor (Barras de Progreso)
 └── 📝 Logger (Archivo + Consola)
 ```
 
@@ -69,7 +78,9 @@ iCousas Data Collector
 2. **SensorDataFetcher**: Consulta API de sensores con paginación
 3. **DataProcessor**: Normaliza y valida datos meteorológicos
 4. **DatabaseManager**: Ejecuta operaciones MERGE en SQL Server
-5. **Sistema de Logging**: Registra todas las operaciones detalladamente
+5. **DataIngestionManager**: Procesa datos finales de TemporalDatosBrutos_iCousas → TemporalDatosBrutos
+6. **ProgressMonitor**: Muestra barras de progreso visual en tiempo real
+7. **Sistema de Logging**: Registra todas las operaciones detalladamente
 
 ## 📋 Requisitos Previos
 
@@ -82,9 +93,16 @@ iCousas Data Collector
 ### 🗄️ Base de Datos
 - **SQL Server**: 2016 o superior
 - **Controlador ODBC**: SQL Server Native Client 11.0+
-- **Tabla requerida**: `TemporalDatosBrutos_iCousas`
+- **Tablas requeridas**:
+  - `TemporalDatosBrutos_iCousas` (temporal - fase 1)
+  - `TemporalDatosBrutos` (final - fase 2)
+  - `AuxEstacionesCodigos` (mapeo estaciones)
+  - `VIDX_AMC_ConNulls` (configuración canales)
+  - `CruceEstacionesListaEstacionesFechasUltimosDatos` (metadatos)
 
-#### 📝 Esquema de Tabla
+#### 📝 Esquemas de Tablas
+
+**Tabla Temporal (Fase 1):**
 ```sql
 CREATE TABLE dbo.TemporalDatosBrutos_iCousas (
     entityId                  NVARCHAR(200)   NOT NULL,
@@ -102,6 +120,28 @@ CREATE TABLE dbo.TemporalDatosBrutos_iCousas (
     windDirection             FLOAT           NULL,
     windSpeed                 FLOAT           NULL,
     CONSTRAINT PK_TemporalDatosBrutos_iCousas PRIMARY KEY (entityId, [index])
+);
+```
+
+**Tabla Final (Fase 2):**
+```sql
+CREATE TABLE dbo.TemporalDatosBrutos (
+    lnEstacion                INT             NOT NULL,
+    FechaHora                 SMALLDATETIME   NOT NULL,
+    Canal                     SMALLINT        NOT NULL,
+    Valor                     REAL            NOT NULL,
+    FechaEntrada              SMALLDATETIME   NULL,
+    CONSTRAINT PK_new_TemporalDatosBrutos PRIMARY KEY CLUSTERED (lnEstacion, FechaHora, Canal)
+);
+```
+
+**Tabla de Metadatos:**
+```sql
+CREATE TABLE dbo.CruceEstacionesListaEstacionesFechasUltimosDatos (
+    lnEstacion                      INT           NOT NULL,
+    lnTipoFechaUltimoDato           INT           NOT NULL,
+    Fecha                          SMALLDATETIME NOT NULL,
+    CONSTRAINT PK_new_CruceListaEstacionesFechasUltimosDatos PRIMARY KEY CLUSTERED (lnEstacion, lnTipoFechaUltimoDato)
 );
 ```
 
@@ -210,6 +250,22 @@ python main.py
 
 ## 🎯 Uso
 
+### Flujo de Procesamiento
+
+El script ejecuta un **procesamiento en dos fases**:
+
+1. **Fase 1**: API → `TemporalDatosBrutos_iCousas`
+   - Obtiene datos de la API iCousas
+   - Los almacena en tabla temporal
+   - Barra de progreso visual
+
+2. **Fase 2**: `TemporalDatosBrutos_iCousas` → `TemporalDatosBrutos`
+   - Procesa datos de tabla temporal
+   - Los mapea a formato final usando configuración de canales
+   - Actualiza metadatos de fechas
+   - Elimina registros procesados
+   - Barra de progreso visual
+
 ### Ejecución Básica
 ```bash
 python main.py
@@ -221,6 +277,15 @@ python main.py
 LOG_LEVEL=DEBUG
 
 # Ejecutar
+python main.py
+```
+
+### Ejecución con Consultas SQL Visibles
+```bash
+# Editar .env y cambiar:
+LOG_LEVEL=DEBUG
+
+# Ejecutar - mostrará todas las consultas SQL ejecutadas
 python main.py
 ```
 
@@ -248,12 +313,20 @@ icousas-data-collector/
 ├── 📄 .env.example           # Plantilla de configuración
 ├── 📄 .env                   # Configuración personal (no versionar)
 ├── 📁 logs/                  # Directorio de logs
-│   ├── 2025-09-09-12.txt    # Log de las 12:00
-│   ├── 2025-09-09-13.txt    # Log de las 13:00
+│   ├── 2025-09-09-12.txt    # Log principal de las 12:00
+│   ├── 2025-09-09-12_ingest.txt  # Log de ingestión de las 12:00
 │   └── ...
 ├── 📄 README.md             # Esta documentación
 └── 📁 __pycache__/          # Archivos compilados Python
 ```
+
+### Componentes del Script
+- **AuthManager**: Autenticación Keycloak
+- **SensorDataFetcher**: Consulta API de sensores
+- **DataProcessor**: Procesamiento inicial con barra de progreso
+- **DatabaseManager**: Operaciones SQL Server
+- **DataIngestionManager**: Procesamiento final con barra de progreso
+- **Sistema de Logging**: Logs separados para cada fase
 
 ## 📊 Logging y Monitoreo
 
@@ -263,17 +336,34 @@ icousas-data-collector/
 - **Contenido**: Información detallada de todas las operaciones
 
 ### Ejemplo de Log Exitoso
+
+**Log Principal (main.py):**
 ```
-2025-09-09 12:00:01 - __main__ - INFO - Iniciando trabajo de recopilación de datos de sensores iCousas
+2025-09-09 12:00:01 - __main__ - INFO - Empezamos
 2025-09-09 12:00:01 - __main__ - INFO - Variables de entorno cargadas exitosamente (20 variables)
 2025-09-09 12:00:01 - __main__ - INFO - Configuración de entorno validada
 2025-09-09 12:00:01 - __main__ - INFO - Autenticando con Keycloak...
 2025-09-09 12:00:02 - __main__ - INFO - Autenticación exitosa
 2025-09-09 12:00:02 - __main__ - INFO - Iniciando obtención de datos...
 2025-09-09 12:00:03 - __main__ - INFO - Se obtuvieron exitosamente 150 dispositivos totales
-2025-09-09 12:00:03 - __main__ - INFO - Procesando 150 registros de dispositivos
-2025-09-09 12:00:04 - __main__ - INFO - Upsert completado: 120 insertados, 30 actualizados
-2025-09-09 12:00:04 - __main__ - INFO - Trabajo completado exitosamente en 3.15 segundos
+Procesando dispositivos: [██████████████████████████████] 100% (150/150)
+2025-09-09 12:00:04 - __main__ - INFO - Se normalizaron exitosamente 150 registros
+2025-09-09 12:00:04 - __main__ - INFO - Almacenando datos en base de datos...
+2025-09-09 12:00:05 - __main__ - INFO - Iniciando proceso de ingestión de datos...
+Procesando registros: [██████████████████████████████] 100% (150/150)
+2025-09-09 12:00:06 - __main__ - INFO - Progreso: 150/150 registros procesados (100%)
+2025-09-09 12:00:06 - __main__ - INFO - Proceso de ingestión completado: 150 registros procesados, 150 registros eliminados
+2025-09-09 12:00:06 - __main__ - INFO - Trabajo completado exitosamente en 5.42 segundos. Procesados 150 registros: 150 insertados/actualizados, 150 ingestados, 150 eliminados
+```
+
+**Log de Ingestión (ingest):**
+```
+2025-09-09 12:00:05 - ingestion - INFO - Iniciando proceso de ingestión de datos...
+2025-09-09 12:00:05 - ingestion - INFO - Leyendo registros de TemporalDatosBrutos_iCousas...
+2025-09-09 12:00:05 - ingestion - INFO - Se leyeron 150 registros de TemporalDatosBrutos_iCousas
+2025-09-09 12:00:05 - ingestion - INFO - Iniciando procesamiento de 150 registros...
+2025-09-09 12:00:06 - ingestion - INFO - Progreso: 150/150 registros procesados (100%)
+2025-09-09 12:00:06 - ingestion - INFO - Proceso de ingestión completado: 150 registros procesados, 150 registros eliminados
 ```
 
 ### Monitoreo de Logs
@@ -444,10 +534,16 @@ Para soporte técnico o reportar problemas:
 
 ## 🏆 Características Destacadas
 
+- ✅ **Filtrado Inteligente de Datos**: Evita reprocesar datos ya procesados
+- ✅ **Procesamiento en Dos Fases**: API → Temporal → Final con barras de progreso
+- ✅ **Manejo Inteligente de Duplicados**: Verificación con redondeo de floats
+- ✅ **Actualización Automática de Metadatos**: Tabla de fechas de último dato
+- ✅ **Consultas SQL Visibles**: Para debugging completo de base de datos
+- ✅ **Logging Dual**: Logs separados para cada fase del procesamiento
+- ✅ **Barra de Progreso Visual**: Seguimiento en tiempo real sin dependencias externas
 - ✅ **Producción Ready**: Código robusto y probado
-- ✅ **Documentación Completa**: En español con ejemplos
+- ✅ **Documentación Completa**: En español con ejemplos actualizados
 - ✅ **Manejo de Errores**: Tratamiento completo de excepciones
-- ✅ **Logging Avanzado**: Información detallada de debugging
 - ✅ **Configuración Flexible**: Variables de entorno
 - ✅ **Seguridad**: Credenciales protegidas
 - ✅ **Rendimiento**: Optimizado para grandes volúmenes
@@ -458,3 +554,21 @@ Para soporte técnico o reportar problemas:
 **Desarrollado con ❤️ para el proyecto iCousas**
 
 *Última actualización: Septiembre 2025*
+
+---
+
+## 📋 Historial de Cambios (v2.0.0)
+
+### ✨ Nuevas Funcionalidades
+- **DataIngestionManager**: Procesamiento independiente de datos finales
+- **Filtrado inteligente**: Evita reprocesar datos ya procesados
+- **Barras de progreso visual**: Seguimiento en tiempo real sin dependencias externas
+- **Actualización automática de metadatos**: Gestión de fechas de último dato
+- **Consultas SQL visibles**: Debugging completo de operaciones de BD
+
+### 🔧 Mejoras Técnicas
+- **Manejo robusto de duplicados**: Verificación previa con redondeo de floats
+- **Corrección de conversión SMALLDATETIME**: Formatos de fecha compatibles
+- **Logging dual**: Logs separados para cada fase de procesamiento
+- **Transacciones atómicas**: Mejor integridad de datos
+- **Manejo de errores mejorado**: Mensajes detallados y recuperación automática

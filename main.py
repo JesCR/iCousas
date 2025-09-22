@@ -11,6 +11,19 @@ import pyodbc
 from dotenv import load_dotenv
 from dateutil import parser as date_parser
 
+# Funciones utilitarias
+def show_progress(current: int, total: int, bar_width: int = 40, description: str = "Procesando") -> None:
+    """Muestra una barra de progreso simple usando caracteres."""
+    if total == 0:
+        return
+
+    percentage = int((current / total) * 100)
+    filled_width = int((current / total) * bar_width)
+    bar = '█' * filled_width + '░' * (bar_width - filled_width)
+
+    # Solo mostrar en consola, no en archivo de log
+    print(f'\r{description}: [{bar}] {percentage}% ({current}/{total})', end='', flush=True)
+
 # Cargar variables de entorno (manejar problemas de BOM)
 def load_env_file():
     """Carga variables de entorno desde archivo .env, manejando problemas de BOM."""
@@ -570,7 +583,7 @@ class DataProcessor:
 
     @staticmethod
     def parse_datetime(iso_string: str) -> str:
-        """Parsea datetime ISO 8601 y convierte a formato SQL Server DATETIME2."""
+        """Parsea datetime ISO 8601 y convierte a formato SQL Server SMALLDATETIME."""
         try:
             dt = date_parser.parse(iso_string)
             # Asegurar zona horaria UTC
@@ -579,8 +592,14 @@ class DataProcessor:
             else:
                 dt = dt.astimezone(timezone.utc)
 
-            # Formatear para SQL Server DATETIME2 (YYYY-MM-DD HH:MM:SS.ffffff)
-            return dt.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]  # Remover últimos 3 dígitos para milisegundos
+            # Formatear para SQL Server SMALLDATETIME (YYYY-MM-DD HH:MM:SS)
+            # SMALLDATETIME tiene precisión de minutos, así que redondeamos al minuto más cercano
+            # Redondear al minuto más cercano
+            if dt.second >= 30:
+                dt = dt + timedelta(minutes=1)
+            dt = dt.replace(second=0, microsecond=0)
+
+            return dt.strftime('%Y-%m-%d %H:%M:%S')
         except Exception as e:
             logger.error(f'Error al parsear datetime {iso_string}: {str(e)}')
             raise ValueError(f'Formato de datetime inválido: {iso_string}')
@@ -636,19 +655,31 @@ class DataProcessor:
     @classmethod
     def process_devices(cls, devices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Procesa todos los registros de dispositivos y retorna datos normalizados."""
-        logger.info(f'Procesando {len(devices)} registros')
+        total_devices = len(devices)
+        logger.info(f'Procesando {total_devices} registros')
 
         normalized_records = []
-        for device in devices:
+        for i, device in enumerate(devices, 1):
             normalized = cls.normalize_record(device)
             if normalized:
                 normalized_records.append(normalized)
+
+            # Mostrar progreso cada 10 registros o al final
+            if i % 10 == 0 or i == total_devices:
+                show_progress(i, total_devices, description="Procesando dispositivos")
+
+        # Nueva línea después de la barra de progreso
+        print()
 
         logger.info(f'Se normalizaron exitosamente {len(normalized_records)} registros')
         return normalized_records
 
 class DatabaseError(Exception):
     """Excepción personalizada para operaciones de base de datos."""
+    pass
+
+class IngestionError(Exception):
+    """Excepción personalizada para operaciones de ingestión."""
     pass
 
 class DatabaseManager:
@@ -689,7 +720,7 @@ class DatabaseManager:
                 logger.warning(f'Error al cerrar conexión a base de datos: {str(e)}')
 
     def upsert_records(self, records: List[Dict[str, Any]]) -> tuple[int, int]:
-        """Inserta/actualiza registros usando tabla temporal y declaración MERGE."""
+        """Inserta/actualiza registros usando tabla temporal y declaración MERGE, filtrando por fecha de último dato."""
         if not records:
             logger.info('No hay registros para insertar/actualizar')
             return 0, 0
@@ -702,6 +733,66 @@ class DatabaseManager:
             connection.autocommit = False
 
             logger.debug(f'Iniciando upsert de {len(records)} registros')
+
+            # Filtrar registros basándose en fecha de último dato
+            filtered_records = []
+            for record in records:
+                entity_id = record['entityId']
+                record_date = record['index']
+
+                # Buscar lnEstacion para este entityId
+                estacion_cursor = connection.cursor()
+                try:
+                    estacion_sql = 'SELECT lnEstacion FROM dbo.AuxEstacionesCodigos WHERE codigo = ?'
+                    estacion_cursor.execute(estacion_sql, entity_id)
+                    estacion_row = estacion_cursor.fetchone()
+
+                    if estacion_row:
+                        ln_estacion = estacion_row[0]
+
+                        # Verificar fecha de último dato con lnTipoFechaUltimoDato = 1
+                        fecha_cursor = connection.cursor()
+                        try:
+                            fecha_sql = '''
+                                SELECT Fecha FROM dbo.CruceEstacionesListaEstacionesFechasUltimosDatos
+                                WHERE lnEstacion = ? AND lnTipoFechaUltimoDato = 1
+                            '''
+                            fecha_cursor.execute(fecha_sql, ln_estacion)
+                            fecha_row = fecha_cursor.fetchone()
+
+                            if fecha_row:
+                                ultima_fecha = fecha_row[0]
+
+                                # Convertir fechas para comparación
+                                if hasattr(record_date, 'strftime'):
+                                    record_dt = record_date
+                                else:
+                                    record_dt = datetime.strptime(str(record_date), '%Y-%m-%d %H:%M:%S')
+
+                                if hasattr(ultima_fecha, 'strftime'):
+                                    ultima_dt = ultima_fecha
+                                else:
+                                    ultima_dt = datetime.strptime(str(ultima_fecha), '%Y-%m-%d %H:%M:%S')
+
+                                # Si la fecha del registro es anterior o igual a la última fecha procesada, saltarlo
+                                if record_dt <= ultima_dt:
+                                    logger.debug(f'Registro ya procesado anteriormente: entityId={entity_id}, fecha={record_date}, última_fecha_procesada={ultima_fecha}')
+                                    continue
+
+                        finally:
+                            fecha_cursor.close()
+
+                finally:
+                    estacion_cursor.close()
+
+                # Si llega aquí, el registro debe procesarse
+                filtered_records.append(record)
+
+            logger.debug(f'Registros después del filtro: {len(filtered_records)} de {len(records)}')
+
+            if not filtered_records:
+                logger.info('Todos los registros fueron filtrados (ya procesados anteriormente)')
+                return 0, 0
 
             # Crear tabla temporal
             temp_table_name = '#staging'
@@ -727,7 +818,7 @@ class DatabaseManager:
             cursor.execute(create_temp_sql)
             logger.debug('Tabla temporal creada')
 
-            # Insertar registros en masa en tabla temporal
+            # Insertar registros filtrados en masa en tabla temporal
             insert_sql = f'''
                 INSERT INTO {temp_table_name} (
                     entityId, [index], airTemperature, atmosphericPressure, batteryVoltage,
@@ -739,7 +830,7 @@ class DatabaseManager:
 
             # Preparar datos para inserción en masa
             data_to_insert = []
-            for record in records:
+            for record in filtered_records:
                 row = (
                     record['entityId'],
                     record['index'],
@@ -757,7 +848,7 @@ class DatabaseManager:
                     record['windSpeed']
                 )
                 data_to_insert.append(row)
-            
+
             # Ejecutar inserción en masa
             cursor.executemany(insert_sql, data_to_insert)
             logger.debug(f'Se insertaron en masa {len(data_to_insert)} registros en tabla temporal')
@@ -797,7 +888,7 @@ class DatabaseManager:
                      src.vaporPressure, src.windDirection, src.windSpeed
                    );
             '''
-            
+
             cursor.execute(merge_sql)
 
             # Obtener conteo de filas afectadas
@@ -810,10 +901,11 @@ class DatabaseManager:
             # Confirmar transacción
             connection.commit()
 
-            updated_count = max(0, affected_rows - len(records))
-            inserted_count = len(records) - updated_count
+            updated_count = max(0, affected_rows - len(filtered_records))
+            inserted_count = len(filtered_records) - updated_count
 
             logger.debug(f'Upsert completado: {inserted_count} insertados, {updated_count} actualizados')
+            logger.info(f'Procesados {len(filtered_records)} registros nuevos (filtrados {len(records) - len(filtered_records)} ya procesados)')
             return inserted_count, updated_count
 
         except pyodbc.Error as e:
@@ -823,7 +915,7 @@ class DatabaseManager:
             except:
                 pass
             raise DatabaseError(f'Operación de base de datos fallida: {str(e)}')
-        
+
         finally:
             try:
                 cursor.close()
@@ -835,6 +927,487 @@ class DatabaseManager:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._close_connection()
+
+class DataIngestionManager:
+    """Maneja el proceso de ingestión de datos desde TemporalDatosBrutos_iCousas hacia TemporalDatosBrutos."""
+
+    def __init__(self, db_config: Dict[str, Any]):
+        self.db_config = db_config
+        self.logger = self._setup_ingestion_logger()
+        self.db_manager = DatabaseManager(db_config)
+
+    def _setup_ingestion_logger(self) -> logging.Logger:
+        """Configura logging específico para ingestión con sufijo '_ingest'."""
+        # Crear directorio de logs si no existe
+        logs_dir = os.path.join(os.getcwd(), 'logs')
+        os.makedirs(logs_dir, exist_ok=True)
+
+        # Generar nombre de archivo de log con formato YYYY-MM-DD_ingest.txt
+        now = datetime.now()
+        log_filename = now.strftime('%Y-%m-%d') + '_ingest.txt'
+        log_filepath = os.path.join(logs_dir, log_filename)
+
+        # Crear logger específico para ingestión
+        ingestion_logger = logging.getLogger('ingestion')
+        ingestion_logger.setLevel(getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper()))
+
+        # Evitar duplicación de handlers si ya existe
+        if ingestion_logger.handlers:
+            return ingestion_logger
+
+        # Crear formateadores
+        file_formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        console_formatter = logging.Formatter(
+            '%(asctime)s - %(levelname)s - %(message)s',
+            datefmt='%H:%M:%S'
+        )
+
+        # Crear manejador de archivo
+        file_handler = logging.FileHandler(log_filepath, encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)  # Registrar todo en archivo
+        file_handler.setFormatter(file_formatter)
+
+        # Crear manejador de consola
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper()))
+        console_handler.setFormatter(console_formatter)
+
+        # Agregar manejadores al logger
+        ingestion_logger.addHandler(file_handler)
+        ingestion_logger.addHandler(console_handler)
+
+        return ingestion_logger
+
+    def read_records_from_icousas(self) -> List[Dict[str, Any]]:
+        """Lee todos los registros de TemporalDatosBrutos_iCousas."""
+        self.logger.info('Leyendo registros de TemporalDatosBrutos_iCousas...')
+
+        connection = self.db_manager._get_connection()
+        cursor = connection.cursor()
+
+        try:
+            select_sql = '''
+                SELECT entityId, [index], airTemperature, atmosphericPressure, batteryVoltage,
+                       lightningAverageDistance, lightningStrikeCount, maximumWindSpeed,
+                       precipitation, relativeHumidity, solarRadiation, vaporPressure,
+                       windDirection, windSpeed
+                FROM dbo.TemporalDatosBrutos_iCousas
+                ORDER BY entityId, [index]
+            '''
+            #print(f"DEBUG SQL - SELECT: {select_sql}")
+
+            cursor.execute(select_sql)
+            columns = [column[0] for column in cursor.description]
+            records = []
+
+            for row in cursor.fetchall():
+                record = dict(zip(columns, row))
+                records.append(record)
+
+            self.logger.info(f'Se leyeron {len(records)} registros de TemporalDatosBrutos_iCousas')
+            return records
+
+        except pyodbc.Error as e:
+            raise IngestionError(f'Error al leer registros de TemporalDatosBrutos_iCousas: {str(e)}')
+        finally:
+            cursor.close()
+
+    def lookup_ln_estacion(self, entity_id: str) -> Optional[int]:
+        """Busca el lnEstacion correspondiente al entityId en AuxEstacionesCodigos."""
+        connection = self.db_manager._get_connection()
+        cursor = connection.cursor()
+
+        try:
+            select_sql = '''
+                SELECT lnEstacion
+                FROM dbo.AuxEstacionesCodigos
+                WHERE codigo = ?
+            '''
+
+            cursor.execute(select_sql, entity_id)
+            row = cursor.fetchone()
+
+            if row:
+                return row[0]
+            else:
+                self.logger.warning(f'No se encontró lnEstacion para entityId: {entity_id}')
+                self.logger.info(f'Query ejecutada: SELECT lnEstacion FROM dbo.AuxEstacionesCodigos WHERE codigo = \'{entity_id}\'')
+                return None
+
+        except pyodbc.Error as e:
+            raise IngestionError(f'Error al buscar lnEstacion para entityId {entity_id}: {str(e)}')
+        finally:
+            cursor.close()
+
+    def get_channels_for_station(self, ln_estacion: int) -> List[Dict[str, Any]]:
+        """Obtiene la lista de canales y medidas para una estación específica."""
+        connection = self.db_manager._get_connection()
+        cursor = connection.cursor()
+
+        try:
+            select_sql = '''
+                SELECT medida, idmedida, canal
+                FROM dbo.VIDX_AMC_ConNulls
+                WHERE idEstacion = ? AND Derivada = 0 AND idTipoIntervalo = 1 AND activa = 1
+                ORDER BY canal
+            '''
+
+            cursor.execute(select_sql, ln_estacion)
+            columns = [column[0] for column in cursor.description]
+            channels = []
+
+            for row in cursor.fetchall():
+                channel = dict(zip(columns, row))
+                channels.append(channel)
+
+            self.logger.debug(f'Se encontraron {len(channels)} canales para la estación {ln_estacion}')
+            return channels
+
+        except pyodbc.Error as e:
+            raise IngestionError(f'Error al obtener canales para estación {ln_estacion}: {str(e)}')
+        finally:
+            cursor.close()
+
+    def _normalize_datetime_for_sql(self, fecha_hora: str) -> str:
+        """Normaliza una fecha para que sea compatible con SMALLDATETIME de SQL Server."""
+        try:
+            # Intentar parsear la fecha
+            dt = date_parser.parse(fecha_hora)
+            # Asegurar zona horaria UTC
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+
+            # Convertir a formato SMALLDATETIME (sin milisegundos, precisión de minutos)
+            if dt.second >= 30:
+                dt = dt + timedelta(minutes=1)
+            dt = dt.replace(second=0, microsecond=0)
+
+            return dt.strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            # Si no se puede parsear, devolver como está (asumiendo que ya está en formato correcto)
+            return fecha_hora
+
+    def insert_into_temporal_datos_brutos(self, ln_estacion: int, fecha_hora: str,
+                                        canal: int, valor: Optional[float]) -> str:
+        """
+        Inserta o actualiza un registro en TemporalDatosBrutos usando consultas separadas.
+        Primero verifica existencia, luego decide INSERT o UPDATE.
+        """
+        # Normalizar la fecha para asegurar compatibilidad con SMALLDATETIME
+        fecha_hora_original = fecha_hora
+        fecha_hora = self._normalize_datetime_for_sql(fecha_hora)
+        #self.logger.debug(f"DEBUG - Fecha normalizada: '{fecha_hora}' (original: {fecha_hora_original})")
+
+        connection = self.db_manager._get_connection()
+        cursor = connection.cursor()
+
+        try:
+            # PASO 1: Verificar si el registro ya existe
+            check_sql = f'''
+                SELECT Valor FROM dbo.TemporalDatosBrutos
+                WHERE lnEstacion = {ln_estacion} AND FechaHora = CONVERT(smalldatetime, '{fecha_hora}', 120) AND Canal = {canal}
+            '''
+            #self.logger.debug(f"DEBUG SQL - CHECK: {check_sql}")
+
+            cursor.execute(check_sql)
+            existing_row = cursor.fetchone()
+
+            if existing_row is not None:
+                # El registro existe
+                existing_value = existing_row[0]
+
+                # Redondear ambos valores a 5 decimales para evitar problemas de precisión
+                existing_value_rounded = round(existing_value, 4) if existing_value is not None else None
+                valor_rounded = round(valor, 4) if valor is not None else None
+
+                if existing_value_rounded == valor_rounded:
+                    # Valor igual - no hacer nada
+                    self.logger.debug(f'Registro ya existe con mismo valor: estación={ln_estacion}, canal={canal}, fecha={fecha_hora}, valor={valor}')
+                    return 'unchanged'
+                else:
+                    # Valor diferente - actualizar
+                    self.logger.debug(f'Valor_bd: {existing_value} (redondeado: {existing_value_rounded}), valor_nuevo: {valor} (redondeado: {valor_rounded})')
+                    update_sql = f'''
+                        UPDATE dbo.TemporalDatosBrutos
+                        SET Valor = {valor}, FechaEntrada = GETDATE()
+                        WHERE lnEstacion = {ln_estacion} AND FechaHora = CONVERT(smalldatetime, '{fecha_hora}', 120) AND Canal = {canal}
+                    '''
+                    #self.logger.debug(f"DEBUG SQL - UPDATE: {update_sql}")
+                    cursor.execute(update_sql)
+                    connection.commit()
+                    self.logger.debug(f'Registro actualizado: estación={ln_estacion}, canal={canal}, fecha={fecha_hora}, valor_antiguo={existing_value_rounded}, valor_nuevo={valor_rounded}')
+                    return 'updated'
+            else:
+                # El registro no existe - insertar
+                if valor is None:
+                    valor_str = 'NULL'
+                else:
+                    valor_str = str(valor)
+
+                insert_sql = f'''
+                    INSERT INTO dbo.TemporalDatosBrutos (lnEstacion, FechaHora, Canal, Valor, FechaEntrada)
+                    VALUES ({ln_estacion}, CONVERT(smalldatetime, '{fecha_hora}', 120), {canal}, {valor_str}, GETDATE())
+                '''
+                #self.logger.debug(f"DEBUG SQL - INSERT: {insert_sql}")
+                cursor.execute(insert_sql)
+                connection.commit()
+                self.logger.debug(f'Registro insertado: estación={ln_estacion}, canal={canal}, fecha={fecha_hora}, valor={valor}')
+                return 'inserted'
+
+        except pyodbc.Error as e:
+            connection.rollback()
+            # Log detallado del error para debugging
+            self.logger.error(f'Error SQL detallado - lnEstacion: {ln_estacion}, fecha_hora: {fecha_hora}, canal: {canal}, valor: {valor}')
+            raise IngestionError(f'Error al procesar registro en TemporalDatosBrutos: {str(e)}')
+        finally:
+            cursor.close()
+
+    def update_fecha_ultimo_dato(self, ln_estacion: int, fecha_hora: str) -> None:
+        """Actualiza la tabla CruceEstacionesListaEstacionesFechasUltimosDatos con restricciones."""
+        from datetime import datetime
+
+        connection = self.db_manager._get_connection()
+        cursor = connection.cursor()
+
+        try:
+            # Asegurar que fecha_hora sea un string en formato correcto
+            if hasattr(fecha_hora, 'strftime'):
+                # Es un objeto datetime, convertir a string
+                fecha_hora_str = fecha_hora.strftime('%Y-%m-%d %H:%M:%S')
+                nueva_fecha = fecha_hora
+            elif isinstance(fecha_hora, str):
+                fecha_hora_str = fecha_hora
+                nueva_fecha = datetime.strptime(fecha_hora, '%Y-%m-%d %H:%M:%S')
+            else:
+                # Otro tipo, convertir
+                fecha_hora_str = str(fecha_hora)
+                nueva_fecha = datetime.strptime(fecha_hora_str, '%Y-%m-%d %H:%M:%S')
+
+            fecha_actual = datetime.now()
+
+            # La nueva fecha no puede ser posterior al instante actual
+            if nueva_fecha > fecha_actual:
+                self.logger.debug(f'Fecha futura ignorada para actualización: estación={ln_estacion}, fecha={fecha_hora}')
+                return
+
+            # Verificar si existe registro actual
+            check_sql = '''
+                SELECT Fecha FROM dbo.CruceEstacionesListaEstacionesFechasUltimosDatos
+                WHERE lnEstacion = ? AND lnTipoFechaUltimoDato = 2
+            '''
+
+            cursor.execute(check_sql, ln_estacion)
+            existing_row = cursor.fetchone()
+
+            if existing_row is not None:
+                # Existe registro, verificar si la nueva fecha es más reciente
+                fecha_actual_registro = existing_row[0]
+
+                # Convertir a datetime si es necesario (puede venir como datetime, string, etc.)
+                if hasattr(fecha_actual_registro, 'strftime'):
+                    # Es un objeto datetime
+                    fecha_actual_dt = fecha_actual_registro
+                elif isinstance(fecha_actual_registro, str):
+                    # Es un string, convertir
+                    fecha_actual_dt = datetime.strptime(fecha_actual_registro, '%Y-%m-%d %H:%M:%S')
+                else:
+                    # Otro tipo, convertir a string primero
+                    fecha_actual_dt = datetime.strptime(str(fecha_actual_registro), '%Y-%m-%d %H:%M:%S')
+
+                if nueva_fecha > fecha_actual_dt:
+                    # Actualizar con la nueva fecha
+                    update_sql = f'''
+                        UPDATE dbo.CruceEstacionesListaEstacionesFechasUltimosDatos
+                        SET Fecha = CONVERT(smalldatetime, '{fecha_hora_str}', 120)
+                        WHERE lnEstacion = {ln_estacion} AND lnTipoFechaUltimoDato = 2
+                    '''
+                    cursor.execute(update_sql)
+                    connection.commit()
+                    self.logger.debug(f'Fecha último dato actualizada: estación={ln_estacion}, fecha_antigua={fecha_actual_dt}, fecha_nueva={nueva_fecha}')
+                else:
+                    self.logger.debug(f'Fecha no actualizada (no es más reciente): estación={ln_estacion}, fecha_actual={fecha_actual_dt}, fecha_nueva={nueva_fecha}')
+            else:
+                # No existe registro, insertar nuevo
+                insert_sql = f'''
+                    INSERT INTO dbo.CruceEstacionesListaEstacionesFechasUltimosDatos
+                    (lnEstacion, lnTipoFechaUltimoDato, Fecha)
+                    VALUES ({ln_estacion}, 2, CONVERT(smalldatetime, '{fecha_hora_str}', 120))
+                '''
+                cursor.execute(insert_sql)
+                connection.commit()
+                self.logger.debug(f'Fecha último dato insertada: estación={ln_estacion}, fecha={nueva_fecha}')
+
+        except pyodbc.Error as e:
+            connection.rollback()
+            raise IngestionError(f'Error al actualizar fecha último dato para estación {ln_estacion}: {str(e)}')
+        except ValueError as e:
+            # Error al parsear fecha
+            self.logger.error(f'Error al parsear fecha {fecha_hora} para estación {ln_estacion}: {str(e)}')
+        finally:
+            cursor.close()
+
+    def delete_from_icousas(self, entity_id: str, fecha_hora: str) -> None:
+        """Elimina un registro específico de TemporalDatosBrutos_iCousas."""
+        connection = self.db_manager._get_connection()
+        cursor = connection.cursor()
+
+        try:
+            delete_sql = '''
+                DELETE FROM dbo.TemporalDatosBrutos_iCousas
+                WHERE entityId = ? AND [index] = ?
+            '''
+
+            cursor.execute(delete_sql, entity_id, fecha_hora)
+            connection.commit()
+
+            self.logger.debug(f'Registro eliminado: entityId={entity_id}, fecha_hora={fecha_hora}')
+
+        except pyodbc.Error as e:
+            connection.rollback()
+            raise IngestionError(f'Error al eliminar registro de TemporalDatosBrutos_iCousas: {str(e)}')
+        finally:
+            cursor.close()
+
+    def _show_progress(self, current: int, total: int, bar_width: int = 40) -> None:
+        """Muestra una barra de progreso simple usando caracteres."""
+        show_progress(current, total, bar_width, description="Procesando registros")
+
+        # Mostrar información detallada cada 20 registros o al final
+        if current % 20 == 0 or current == total:
+            percentage = int((current / total) * 100)
+            self.logger.info(f'Progreso: {current}/{total} registros procesados ({percentage}%)')
+
+    def process_ingestion(self) -> tuple[int, int]:
+        """
+        Procesa la ingestión completa de datos desde TemporalDatosBrutos_iCousas hacia TemporalDatosBrutos.
+
+        Returns:
+            tuple[int, int]: (registros_procesados, registros_eliminados)
+        """
+        self.logger.info('Iniciando proceso de ingestión de datos...')
+
+        try:
+            # Leer todos los registros de TemporalDatosBrutos_iCousas
+            records = self.read_records_from_icousas()
+
+            if not records:
+                self.logger.info('No hay registros para procesar en TemporalDatosBrutos_iCousas')
+                return 0, 0
+
+            processed_count = 0
+            deleted_count = 0
+            total_records = len(records)
+
+            self.logger.info(f'Iniciando procesamiento de {total_records} registros...')
+
+            # Procesar cada registro
+            for record in records:
+                entity_id = record['entityId']
+                fecha_hora = record['index']
+
+                try:
+                    # Buscar lnEstacion
+                    ln_estacion = self.lookup_ln_estacion(entity_id)
+
+                    if ln_estacion is None:
+                        self.logger.warning(f'Saltando registro con entityId desconocido: {entity_id}')
+                        processed_count += 1
+                        self._show_progress(processed_count, total_records)
+                        continue
+
+                    # Obtener canales para la estación
+                    channels = self.get_channels_for_station(ln_estacion)
+
+                    if not channels:
+                        self.logger.warning(f'No se encontraron canales para la estación {ln_estacion}')
+                        processed_count += 1
+                        self._show_progress(processed_count, total_records)
+                        continue
+
+                    # Mapear campos por orden (1-based indexing)
+                    field_mapping = [
+                        ('entityId', 1),  # Canal 1
+                        ('index', 2),     # Canal 2
+                        ('airTemperature', 3),  # Canal 3
+                        ('atmosphericPressure', 4),  # Canal 4
+                        ('batteryVoltage', 5),  # Canal 5
+                        ('lightningAverageDistance', 6),  # Canal 6
+                        ('lightningStrikeCount', 7),  # Canal 7
+                        ('maximumWindSpeed', 8),  # Canal 8
+                        ('precipitation', 9),  # Canal 9
+                        ('relativeHumidity', 10),  # Canal 10
+                        ('solarRadiation', 11),  # Canal 11
+                        ('vaporPressure', 12),  # Canal 12
+                        ('windDirection', 13),  # Canal 13
+                        ('windSpeed', 14)  # Canal 14
+                    ]
+
+                    # Insertar datos para cada canal
+                    operations_completed = 0
+                    processed_count_local = 0
+                    unchanged_count_local = 0
+
+                    for field_name, expected_canal in field_mapping:
+                        # Buscar si este canal existe en la configuración de la estación
+                        channel_info = next((ch for ch in channels if ch['canal'] == expected_canal), None)
+
+                        if channel_info:
+                            valor = record.get(field_name)
+                            # Convertir index a datetime si es necesario
+                            if field_name == 'index':
+                                valor = fecha_hora
+
+                            try:
+                                operation_result = self.insert_into_temporal_datos_brutos(
+                                    ln_estacion, fecha_hora, expected_canal, valor
+                                )
+                                operations_completed += 1
+
+                                # Contabilizar el tipo de operación
+                                if operation_result in ['inserted', 'updated', 'processed']:
+                                    processed_count_local += 1
+                                elif operation_result == 'unchanged':
+                                    unchanged_count_local += 1
+
+                            except IngestionError as e:
+                                self.logger.error(f'Error al procesar canal {expected_canal}: {str(e)}')
+                                raise  # Re-lanzar para detener procesamiento de este registro
+
+                    # Si todas las operaciones fueron exitosas, actualizar tabla de fechas y eliminar el registro original
+                    if operations_completed > 0:
+                        # Actualizar tabla CruceEstacionesListaEstacionesFechasUltimosDatos
+                        self.update_fecha_ultimo_dato(ln_estacion, fecha_hora)
+
+                        # Eliminar el registro original
+                        self.delete_from_icousas(entity_id, fecha_hora)
+                        deleted_count += 1
+                        self.logger.debug(f'Procesado exitosamente registro: entityId={entity_id}, fecha_hora={fecha_hora} '
+                                        f'(procesados: {processed_count_local}, sin_cambio: {unchanged_count_local})')
+
+                    processed_count += 1
+                    self._show_progress(processed_count, total_records)
+
+                except IngestionError as e:
+                    self.logger.error(f'Error procesando registro {entity_id} {fecha_hora}: {str(e)}')
+                    processed_count += 1
+                    self._show_progress(processed_count, total_records)
+                    # Continuar con el siguiente registro
+                    continue
+
+            # Nueva línea después de la barra de progreso
+            print()
+
+            self.logger.info(f'Proceso de ingestión completado: {processed_count} registros procesados, {deleted_count} registros eliminados')
+            return processed_count, deleted_count
+
+        except Exception as e:
+            self.logger.error(f'Error inesperado en proceso de ingestión: {str(e)}')
+            raise IngestionError(f'Proceso de ingestión fallido: {str(e)}')
 
 def main() -> int:
     """Función principal para ejecutar el proceso de recopilación y almacenamiento de datos."""
@@ -888,12 +1461,27 @@ def main() -> int:
         with DatabaseManager(db_config) as db_manager:
             inserted, updated = db_manager.upsert_records(normalized_records)
 
+        # Procesar ingestión después de la inserción exitosa
+        logger.info('Iniciando proceso de ingestión de datos...')
+        try:
+            ingestion_manager = DataIngestionManager(db_config)
+            processed_ingestion, deleted_ingestion = ingestion_manager.process_ingestion()
+
+            logger.info(
+                f'Proceso de ingestión completado: {processed_ingestion} registros procesados, '
+                f'{deleted_ingestion} registros eliminados de tabla temporal'
+            )
+        except IngestionError as e:
+            logger.error(f'Proceso de ingestión fallido: {str(e)}')
+            return 1
+
         end_time = datetime.now(timezone.utc)
         duration = end_time - start_time
 
         logger.info(
             f'Trabajo completado exitosamente en {duration.total_seconds():.2f} segundos. '
-            f'Procesados {len(normalized_records)} registros: {inserted + updated} procesados'
+            f'Procesados {len(normalized_records)} registros: {inserted + updated} insertados/actualizados, '
+            f'{processed_ingestion} ingestados, {deleted_ingestion} eliminados'
         )
 
         return 0
@@ -906,6 +1494,9 @@ def main() -> int:
         return 1
     except DatabaseError as e:
         logger.error(f'Operación de base de datos fallida: {str(e)}')
+        return 1
+    except IngestionError as e:
+        logger.error(f'Operación de ingestión fallida: {str(e)}')
         return 1
     except ValueError as e:
         logger.error(f'Error de configuración: {str(e)}')
