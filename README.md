@@ -29,6 +29,7 @@ Un script robusto y de producción en Python para recopilar, procesar y almacena
 - **Ventana temporal configurable**: Últimos N minutos de datos
 - **Paginación automática**: Manejo de grandes volúmenes de datos
 - **Normalización**: Conversión automática de tipos de datos
+- **Conversión de unidades**: atmosphericPressure kPa → hPa (canal 4)
 - **Validación**: Verificación de integridad de datos
 - **Redondeo robusto de minutos**: Algoritmo avanzado que evita hour=24 y minute=60
 - **Ordenamiento inteligente**: Registros ordenados por fecha para procesamiento correcto
@@ -572,6 +573,7 @@ Para soporte técnico o reportar problemas:
 
 ### 🔧 Mejoras Técnicas
 - **Manejo robusto de duplicados**: Verificación previa con redondeo de floats
+- **Conversión de unidades meteorológicas**: atmosphericPressure ×10 (kPa→hPa)
 - **Corrección de conversión SMALLDATETIME**: Formatos de fecha compatibles
 - **Parsing avanzado de fechas ISO 8601**: datetime.fromisoformat + fallback dateutil + redondeo robusto
 - **Validación de integridad**: Estaciones deben estar pre-registradas en metadatos

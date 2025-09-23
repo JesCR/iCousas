@@ -1,5 +1,22 @@
 import os
 import sys
+import io
+
+# Fuerza modo UTF-8 en Python y stdio
+os.environ.setdefault('PYTHONUTF8', '1')
+os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
+
+try:
+    sys.stdin.reconfigure(encoding='utf-8', errors='replace')
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    # Compat con entornos donde reconfigure no existe
+    if hasattr(sys.stdout, 'buffer'):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'buffer'):
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 import logging
 import time
 from datetime import datetime, timezone, timedelta
@@ -13,15 +30,18 @@ from dateutil import parser as date_parser
 
 # Funciones utilitarias
 def show_progress(current: int, total: int, bar_width: int = 40, description: str = "Procesando") -> None:
-    """Muestra una barra de progreso simple usando caracteres."""
+    """Barra de progreso simple y compatible con WinRM."""
     if total == 0:
         return
+    try:
+        if not sys.stdout.isatty():
+            return  # evita pintar en logs capturados por Rundeck
+    except Exception:
+        pass
 
     percentage = int((current / total) * 100)
     filled_width = int((current / total) * bar_width)
-    bar = '█' * filled_width + '░' * (bar_width - filled_width)
-
-    # Solo mostrar en consola, no en archivo de log
+    bar = '*' * filled_width + '|' * (bar_width - filled_width)
     print(f'\r{description}: [{bar}] {percentage}% ({current}/{total})', end='', flush=True)
 
 # Cargar variables de entorno (manejar problemas de BOM)
@@ -83,9 +103,9 @@ def load_env_file():
                         if key and value:  # Asegurar que tanto clave como valor no estén vacíos
                             os.environ[key] = value
                             loaded_count += 1
-                            # Salida de debug para contraseñas (mostrar longitud para verificación, ocultar valor)
+                            # Salida de debug para contrasenhas (mostrar longitud para verificación, ocultar valor)
                             if 'PASSWORD' in key.upper():
-                                print(f"Variable de contraseña cargada: {key} (longitud: {len(value)} caracteres)")
+                                print(f"Variable de contrasenha cargada: {key} (longitud: {len(value)} caracteres)")
                             else:
                                 print(f"Cargado: {key}={value}")
                 else:
@@ -300,7 +320,7 @@ class AuthManager:
 
         session = self._create_session()
 
-        # Usar formato diccionario para codificación URL correcta (especialmente importante para contraseñas con caracteres especiales)
+        # Usar formato diccionario para codificación URL correcta (especialmente importante para contrasenhas con caracteres especiales)
         data = {
             'client_id': self.config['client_id'],
             'username': self.config['username'],
@@ -315,11 +335,11 @@ class AuthManager:
             logger.debug(f"URL: {self.config['url']}")
             logger.debug(f"Headers: Content-Type: application/x-www-form-urlencoded")
             logger.debug(f"Datos: client_id={self.config['client_id']}&username={self.config['username']}&password=[OCULTO]&grant_type={self.config['grant_type']}")
-            logger.debug(f"Longitud de contraseña: {len(self.config['password'])} caracteres")
+            logger.debug(f"Longitud de contrasenha: {len(self.config['password'])} caracteres")
             logger.debug("El diccionario de datos contiene información sensible - no registrado")
             logger.debug("Timeout: {} segundos".format(self.http_config['timeout']))
 
-            # Generar equivalente curl (sin contraseña por seguridad)
+            # Generar equivalente curl (sin contrasenha por seguridad)
             curl_cmd = (
                 f"curl --location --request POST \"{self.config['url']}\" "
                 f"--header \"Content-Type: application/x-www-form-urlencoded\" "
@@ -1386,6 +1406,12 @@ class DataIngestionManager:
 
                         if channel_info:
                             valor = record.get(field_name)
+
+                            # Conversión específica para atmosphericPressure (canal 4): kPa → hPa
+                            if expected_canal == 4 and valor is not None:
+                                valor = valor * 10
+                                self.logger.debug(f'Conversión atmosphericPressure: {record.get(field_name)} kPa → {valor} hPa')
+
                             # Convertir index a datetime si es necesario
                             if field_name == 'index':
                                 valor = fecha_hora
