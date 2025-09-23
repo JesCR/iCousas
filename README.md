@@ -30,6 +30,8 @@ Un script robusto y de producción en Python para recopilar, procesar y almacena
 - **Paginación automática**: Manejo de grandes volúmenes de datos
 - **Normalización**: Conversión automática de tipos de datos
 - **Validación**: Verificación de integridad de datos
+- **Redondeo robusto de minutos**: Algoritmo avanzado que evita hour=24 y minute=60
+- **Ordenamiento inteligente**: Registros ordenados por fecha para procesamiento correcto
 - **Filtrado inteligente**: Evita reprocesar datos ya procesados basándose en metadatos
 - **Barra de progreso visual**: Seguimiento en tiempo real del procesamiento
 - **Procesamiento en dos fases**: API → TemporalDatosBrutos_iCousas → TemporalDatosBrutos
@@ -40,7 +42,7 @@ Un script robusto y de producción en Python para recopilar, procesar y almacena
 - **Transacciones ACID**: Garantía de integridad de datos
 - **Tablas temporales**: Optimización de rendimiento
 - **Manejo inteligente de duplicados**: Verificación previa con redondeo de floats
-- **Actualización automática de metadatos**: Tabla CruceEstacionesListaEstacionesFechasUltimosDatos
+- **Actualización automática de metadatos**: Tabla CruceEstacionesListaEstacionesFechasUltimosDatos (estaciones pre-registradas)
 - **Manejo de errores**: Rollback automático en fallos
 
 ### 📝 Logging Avanzado
@@ -534,7 +536,7 @@ Para soporte técnico o reportar problemas:
 
 ## 🏆 Características Destacadas
 
-- ✅ **Filtrado Inteligente de Datos**: Evita reprocesar datos ya procesados
+- ✅ **Redondeo Inteligente de Minutos**: Fechas normalizadas para sistema de almacenamiento
 - ✅ **Procesamiento en Dos Fases**: API → Temporal → Final con barras de progreso
 - ✅ **Manejo Inteligente de Duplicados**: Verificación con redondeo de floats
 - ✅ **Actualización Automática de Metadatos**: Tabla de fechas de último dato
@@ -561,14 +563,18 @@ Para soporte técnico o reportar problemas:
 
 ### ✨ Nuevas Funcionalidades
 - **DataIngestionManager**: Procesamiento independiente de datos finales
+- **Redondeo inteligente de minutos**: Fechas normalizadas a minutos permitidos (0,10,20,30,40,50)
+- **Ordenamiento inteligente**: Registros ordenados por fecha para procesamiento correcto
 - **Filtrado inteligente**: Evita reprocesar datos ya procesados
 - **Barras de progreso visual**: Seguimiento en tiempo real sin dependencias externas
-- **Actualización automática de metadatos**: Gestión de fechas de último dato
+- **Actualización automática de metadatos**: Gestión de fechas de último dato (estaciones pre-registradas)
 - **Consultas SQL visibles**: Debugging completo de operaciones de BD
 
 ### 🔧 Mejoras Técnicas
 - **Manejo robusto de duplicados**: Verificación previa con redondeo de floats
 - **Corrección de conversión SMALLDATETIME**: Formatos de fecha compatibles
+- **Parsing avanzado de fechas ISO 8601**: datetime.fromisoformat + fallback dateutil + redondeo robusto
+- **Validación de integridad**: Estaciones deben estar pre-registradas en metadatos
 - **Logging dual**: Logs separados para cada fase de procesamiento
 - **Transacciones atómicas**: Mejor integridad de datos
 - **Manejo de errores mejorado**: Mensajes detallados y recuperación automática

@@ -490,7 +490,7 @@ class SensorDataFetcher:
                     try:
                         response_data = response.json()
                         if 'devices' in response_data:
-                            logger.debug(f"Encontrados {len(response_data['devices'])} dispositivos en respuesta")
+                            logger.debug(f"Api devuelve {len(response_data['devices'])} registros")
                         else:
                             logger.debug("No se encontró clave 'devices' en respuesta")
                     except:
@@ -530,7 +530,7 @@ class SensorDataFetcher:
                         try:
                             response_data = response.json()
                             if 'devices' in response_data:
-                                logger.debug(f"Reintento encontró {len(response_data['devices'])} dispositivos en respuesta")
+                                logger.debug(f"Reintento encontró {len(response_data['devices'])} registros en la llamada a la api")
                         except:
                             logger.debug("Respuesta del reintento no es JSON válido")
                     else:
@@ -542,7 +542,7 @@ class SensorDataFetcher:
                     devices = data.get('devices', [])
 
                     if not devices:
-                        logger.info('No se encontraron dispositivos en respuesta')
+                        logger.info('No se encontraron registros en la llamada a la api')
                         break
 
                     all_devices.extend(devices)
@@ -582,23 +582,36 @@ class DataProcessor:
     ]
 
     @staticmethod
-    def parse_datetime(iso_string: str) -> str:
-        """Parsea datetime ISO 8601 y convierte a formato SQL Server SMALLDATETIME."""
+    def _parse_iso_to_utc(iso_string: str) -> datetime:
+        """Devuelve un datetime consciente en UTC a partir de un ISO 8601."""
+        s = iso_string.replace('Z', '+00:00')  # Soporta sufijo Z
         try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
             dt = date_parser.parse(iso_string)
-            # Asegurar zona horaria UTC
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            else:
-                dt = dt.astimezone(timezone.utc)
 
-            # Formatear para SQL Server SMALLDATETIME (YYYY-MM-DD HH:MM:SS)
-            # SMALLDATETIME tiene precisión de minutos, así que redondeamos al minuto más cercano
-            # Redondear al minuto más cercano
-            if dt.second >= 30:
-                dt = dt + timedelta(minutes=1)
-            dt = dt.replace(second=0, microsecond=0)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt
 
+    @staticmethod
+    def _round_to_allowed_10min(dt: datetime) -> datetime:
+        """
+        Redondea al múltiplo de 10 minutos más cercano (0,10,20,30,40,50).
+        Estrategia: +5 minutos y luego 'floor' a décimas → evita minute=60 y hour=24.
+        """
+        dt = dt + timedelta(minutes=5)  # redondeo al más cercano por minutos
+        floored_minute = (dt.minute // 10) * 10
+        return dt.replace(minute=floored_minute, second=0, microsecond=0)
+
+    @staticmethod
+    def parse_datetime(iso_string: str) -> str:
+        """ISO 8601 → SMALLDATETIME (UTC), redondeo a 0/10/20/30/40/50."""
+        try:
+            dt = DataProcessor._parse_iso_to_utc(iso_string)
+            dt = DataProcessor._round_to_allowed_10min(dt)
             return dt.strftime('%Y-%m-%d %H:%M:%S')
         except Exception as e:
             logger.error(f'Error al parsear datetime {iso_string}: {str(e)}')
@@ -734,9 +747,13 @@ class DatabaseManager:
 
             logger.debug(f'Iniciando upsert de {len(records)} registros')
 
+            # Ordenar registros por fecha ascendente para procesamiento correcto
+            records_sorted = sorted(records, key=lambda x: x['index'])
+            logger.debug(f'Registros ordenados por fecha: {len(records_sorted)} registros')
+
             # Filtrar registros basándose en fecha de último dato
             filtered_records = []
-            for record in records:
+            for record in records_sorted:
                 entity_id = record['entityId']
                 record_date = record['index']
 
@@ -750,12 +767,13 @@ class DatabaseManager:
                     if estacion_row:
                         ln_estacion = estacion_row[0]
 
-                        # Verificar fecha de último dato con lnTipoFechaUltimoDato = 1
+                        # Verificar fecha de último dato con lnTipoFechaUltimoDato = 2
                         fecha_cursor = connection.cursor()
                         try:
+                            #No queremos fechas anteriores ala ultima fecha procesada por el mcheck
                             fecha_sql = '''
                                 SELECT Fecha FROM dbo.CruceEstacionesListaEstacionesFechasUltimosDatos
-                                WHERE lnEstacion = ? AND lnTipoFechaUltimoDato = 1
+                                WHERE lnEstacion = ? AND lnTipoFechaUltimoDato = 2
                             '''
                             fecha_cursor.execute(fecha_sql, ln_estacion)
                             fecha_row = fecha_cursor.fetchone()
@@ -788,7 +806,7 @@ class DatabaseManager:
                 # Si llega aquí, el registro debe procesarse
                 filtered_records.append(record)
 
-            logger.debug(f'Registros después del filtro: {len(filtered_records)} de {len(records)}')
+            logger.debug(f'Registros después del filtro: {len(filtered_records)} de {len(records_sorted)}')
 
             if not filtered_records:
                 logger.info('Todos los registros fueron filtrados (ya procesados anteriormente)')
@@ -905,7 +923,7 @@ class DatabaseManager:
             inserted_count = len(filtered_records) - updated_count
 
             logger.debug(f'Upsert completado: {inserted_count} insertados, {updated_count} actualizados')
-            logger.info(f'Procesados {len(filtered_records)} registros nuevos (filtrados {len(records) - len(filtered_records)} ya procesados)')
+            logger.info(f'Procesados {len(filtered_records)} registros nuevos (filtrados {len(records_sorted) - len(filtered_records)} ya procesados)')
             return inserted_count, updated_count
 
         except pyodbc.Error as e:
@@ -1071,25 +1089,37 @@ class DataIngestionManager:
         finally:
             cursor.close()
 
-    def _normalize_datetime_for_sql(self, fecha_hora: str) -> str:
-        """Normaliza una fecha para que sea compatible con SMALLDATETIME de SQL Server."""
+    def _parse_iso_to_utc(self, iso_string: str) -> datetime:
+        """Devuelve un datetime consciente en UTC a partir de un ISO 8601."""
+        s = iso_string.replace('Z', '+00:00')  # Soporta sufijo Z
         try:
-            # Intentar parsear la fecha
-            dt = date_parser.parse(fecha_hora)
-            # Asegurar zona horaria UTC
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            else:
-                dt = dt.astimezone(timezone.utc)
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            dt = date_parser.parse(iso_string)
 
-            # Convertir a formato SMALLDATETIME (sin milisegundos, precisión de minutos)
-            if dt.second >= 30:
-                dt = dt + timedelta(minutes=1)
-            dt = dt.replace(second=0, microsecond=0)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt
 
+    def _round_to_allowed_10min(self, dt: datetime) -> datetime:
+        """
+        Redondea al múltiplo de 10 minutos más cercano (0,10,20,30,40,50).
+        Estrategia: +5 minutos y luego 'floor' a décimas → evita minute=60 y hour=24.
+        """
+        dt = dt + timedelta(minutes=5)  # redondeo al más cercano por minutos
+        floored_minute = (dt.minute // 10) * 10
+        return dt.replace(minute=floored_minute, second=0, microsecond=0)
+
+    def _normalize_datetime_for_sql(self, fecha_hora: str) -> str:
+        """Normaliza y redondea a múltiplos de 10 min para SMALLDATETIME (UTC)."""
+        try:
+            dt = self._parse_iso_to_utc(fecha_hora)
+            dt = self._round_to_allowed_10min(dt)
             return dt.strftime('%Y-%m-%d %H:%M:%S')
         except Exception:
-            # Si no se puede parsear, devolver como está (asumiendo que ya está en formato correcto)
+            # Si ya viniera formateada correctamente, la devolvemos tal cual
             return fecha_hora
 
     def insert_into_temporal_datos_brutos(self, ln_estacion: int, fecha_hora: str,
@@ -1101,7 +1131,8 @@ class DataIngestionManager:
         # Normalizar la fecha para asegurar compatibilidad con SMALLDATETIME
         fecha_hora_original = fecha_hora
         fecha_hora = self._normalize_datetime_for_sql(fecha_hora)
-        #self.logger.debug(f"DEBUG - Fecha normalizada: '{fecha_hora}' (original: {fecha_hora_original})")
+        if fecha_hora != fecha_hora_original:
+            print(f"DEBUG - Fecha redondeada: '{fecha_hora}' (original: {fecha_hora_original})")
 
         connection = self.db_manager._get_connection()
         cursor = connection.cursor()
@@ -1168,7 +1199,8 @@ class DataIngestionManager:
             cursor.close()
 
     def update_fecha_ultimo_dato(self, ln_estacion: int, fecha_hora: str) -> None:
-        """Actualiza la tabla CruceEstacionesListaEstacionesFechasUltimosDatos con restricciones."""
+        """Actualiza la tabla CruceEstacionesListaEstacionesFechasUltimosDatos con restricciones.
+        Requiere que la estación ya esté registrada en la tabla de metadatos."""
         from datetime import datetime
 
         connection = self.db_manager._get_connection()
@@ -1198,7 +1230,7 @@ class DataIngestionManager:
             # Verificar si existe registro actual
             check_sql = '''
                 SELECT Fecha FROM dbo.CruceEstacionesListaEstacionesFechasUltimosDatos
-                WHERE lnEstacion = ? AND lnTipoFechaUltimoDato = 2
+                WHERE lnEstacion = ? AND lnTipoFechaUltimoDato = 1
             '''
 
             cursor.execute(check_sql, ln_estacion)
@@ -1224,7 +1256,7 @@ class DataIngestionManager:
                     update_sql = f'''
                         UPDATE dbo.CruceEstacionesListaEstacionesFechasUltimosDatos
                         SET Fecha = CONVERT(smalldatetime, '{fecha_hora_str}', 120)
-                        WHERE lnEstacion = {ln_estacion} AND lnTipoFechaUltimoDato = 2
+                        WHERE lnEstacion = {ln_estacion} AND lnTipoFechaUltimoDato = 1
                     '''
                     cursor.execute(update_sql)
                     connection.commit()
@@ -1232,15 +1264,11 @@ class DataIngestionManager:
                 else:
                     self.logger.debug(f'Fecha no actualizada (no es más reciente): estación={ln_estacion}, fecha_actual={fecha_actual_dt}, fecha_nueva={nueva_fecha}')
             else:
-                # No existe registro, insertar nuevo
-                insert_sql = f'''
-                    INSERT INTO dbo.CruceEstacionesListaEstacionesFechasUltimosDatos
-                    (lnEstacion, lnTipoFechaUltimoDato, Fecha)
-                    VALUES ({ln_estacion}, 2, CONVERT(smalldatetime, '{fecha_hora_str}', 120))
-                '''
-                cursor.execute(insert_sql)
-                connection.commit()
-                self.logger.debug(f'Fecha último dato insertada: estación={ln_estacion}, fecha={nueva_fecha}')
+                # ERROR: No existe registro de metadatos para esta estación
+                error_msg = f'Estación {ln_estacion} no encontrada en tabla CruceEstacionesListaEstacionesFechasUltimosDatos. ' \
+                           f'La estación debe estar registrada antes de procesar datos.'
+                self.logger.error(error_msg)
+                raise IngestionError(error_msg)
 
         except pyodbc.Error as e:
             connection.rollback()
